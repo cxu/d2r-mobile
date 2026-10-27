@@ -164,7 +164,9 @@ JNIEXPORT jint JNICALL Java_com_xiaoboluo_d2r_DmActivity_nativeStart(JNIEnv *env
     load_env_file(g_runtime);
     LOG("boot: 内部目录 %s，外部目录 %s，资源 %s，系统语言 %s", g_files, g_ext, g_src, lg);
     char romfs[1100], save[1100], temp[1100];
-    snprintf(romfs, sizeof romfs, "%s/romfs", g_files); snprintf(save, sizeof save, "%s/save", g_files); snprintf(temp, sizeof temp, "%s/temp", g_files);
+    snprintf(romfs, sizeof romfs, "%s/romfs", g_files); snprintf(save, sizeof save, "%s/save", g_ext);
+    const char *pub_save = "/storage/emulated/0/Download/S2X/D2R Mobile/save"; mkdirs(pub_save);
+    if (access(pub_save, R_OK | W_OK) == 0) snprintf(save, sizeof save, "%s", pub_save); /* save external: public dir first */ snprintf(temp, sizeof temp, "%s/temp", g_files);
     mkdirs(save); mkdirs(temp);
     int n = link_romfs(romfs);
     LOG("boot: 资源链接 %d 个文件", n);

@@ -207,6 +207,19 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
         if (list != null) for (File c : list) deleteTree(c);
         if (f.exists() && !f.delete()) throw new IOException("delete " + f.getName());
     }
+    private static void copyTree(File src, File dst) throws IOException {
+        if (src.isDirectory()) {
+            if (!dst.exists() && !dst.mkdirs()) throw new IOException("mkdir " + dst);
+            File[] list = src.listFiles();
+            if (list != null) for (File c : list) copyTree(c, new File(dst, c.getName()));
+        } else {
+            if (!dst.getParentFile().exists() && !dst.getParentFile().mkdirs()) throw new IOException("mkdir " + dst.getParentFile());
+            try (FileInputStream in = new FileInputStream(src); FileOutputStream out = new FileOutputStream(dst)) {
+                byte[] buf = new byte[1 << 16]; int n;
+                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            }
+        }
+    }
 
     private void startHost() {
         if (bootFailure != 0) { showBootFailure(); return; }
@@ -253,6 +266,15 @@ public class DmActivity extends Activity implements SurfaceHolder.Callback, Disp
         File data = new File(downloads, "S2X/D2R Mobile/data"), earlier = new File(downloads, "data");
         if (!data.isDirectory() && earlier.isDirectory()) data = earlier;
         String src = data.getAbsolutePath();
+        // save external: migrate private -> public Download/S2X/D2R Mobile/save once (never blocks startup)
+        File oldSave = new File(ext, "save"), pubSave = new File(downloads, "S2X/D2R Mobile/save");
+        if (oldSave.isDirectory()) {
+            pubSave.mkdirs();
+            File[] oe = oldSave.listFiles(), pe = pubSave.listFiles();
+            if (oe != null && oe.length > 0 && (pe == null || pe.length == 0)) {
+                try { copyTree(oldSave, pubSave); deleteTree(oldSave); } catch (IOException e) { }
+            }
+        }
         int result = nativeStart(getFilesDir().getAbsolutePath(), ext.getAbsolutePath(), src, Locale.getDefault().toLanguageTag());
         if (result < 0) {
             int resource = switch (result) {
