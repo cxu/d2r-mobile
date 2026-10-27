@@ -51,6 +51,14 @@ int clonefile(const char *src, const char *dst, int flags);   // dm/android/comp
 #define RENAME_SWAP (1u << 1)   // 与 Linux RENAME_EXCHANGE 同值 | Same value as Linux RENAME_EXCHANGE
 #endif
 static inline int renamex_np(const char *from, const char *to, unsigned flags) {
-    return (int)syscall(__NR_renameat2, AT_FDCWD, from, AT_FDCWD, to, flags & RENAME_SWAP ? (1u << 1) : 0u);
+    int r = (int)syscall(__NR_renameat2, AT_FDCWD, from, AT_FDCWD, to, flags & RENAME_SWAP ? (1u << 1) : 0u);
+    if (r == 0 || !(flags & RENAME_SWAP) || errno != EINVAL) return r;
+    /* 公共目录（sdcardfs）不支持 RENAME_EXCHANGE：降级三步式（to→to.old、from→to、old→from），保持“互换后 from=旧版、to=新版”语义 */
+    char old[1150]; int n = snprintf(old, sizeof old, "%s.old", to);
+    if (n < 0 || n >= (int)sizeof old) { errno = ENAMETOOLONG; return -1; }
+    if (rename(to, old) && errno != ENOENT) return -1;
+    if (rename(from, to)) { int e = errno; if (!access(old, F_OK)) rename(old, to); errno = e; return -1; }
+    if (!access(old, F_OK)) rename(old, from);
+    return 0;
 }
 #endif

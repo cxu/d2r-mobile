@@ -266,8 +266,13 @@ static int set_guest_name(const char *hp, const char *path) {
     if (k >= sizeof guest) { errno = ENAMETOOLONG; return -1; }
     memcpy(guest, start, k); guest[k] = 0;
     const char *physical = strrchr(hp, '/') + 1;
-    if (strcmp(physical, guest)) return fs_xattr_set(hp, guest, strlen(guest));
-    if (!fs_xattr_del(hp) || errno == ENOATTR) return 0;
+    if (strcmp(physical, guest)) {
+        int r = fs_xattr_set(hp, guest, strlen(guest));
+        if (r && errno == EOPNOTSUPP) return 0;   // 公共目录（sdcardfs）不支持 user.* xattr：别名映射记不了（罕见），忽略
+        return r;
+    }
+    if (!fs_xattr_del(hp) || errno == ENOATTR || errno == EOPNOTSUPP) return 0;   // 同上：删不了 = 没有，视同干净
+    return -1;
     return -1;
 }
 static Result err_res(const char *op, const char *path) {
@@ -477,7 +482,10 @@ HLE_FORCE("_ZN2nn2fs6CommitEPKc", "fsp-srv；事务式存档：工作目录整�
         char re[1100]; snprintf(re, sizeof re, "%s.re", g_mnt[i].dir); int rerr = 0;
         if (!access(re, F_OK) && rm_tree(re)) rerr = errno ? errno : EIO;
         else if (dm_fs_test_fail("reclone") || clonefile(g_mnt[i].commit, re, 0)) { rerr = errno ? errno : EIO; rm_tree(re); }
-        else if (renamex_np(re, g_mnt[i].dir, RENAME_SWAP)) { rerr = errno ? errno : EIO; rm_tree(re); }
+        else if (renamex_np(re, g_mnt[i].dir, RENAME_SWAP)) {
+            if (rm_tree(g_mnt[i].dir) || clonefile(re, g_mnt[i].dir, 0)) { rerr = errno ? errno : EIO; rm_tree(re); }
+            else rm_tree(re);
+        }
         else rm_tree(re);                                               // 换下来的被污染工作目录 | The swapped-out tainted work directory
         if (rerr) { save_poison(perr); LOG("【红】存档事务：重新克隆工作目录失败 errno=%d——工作目录不动、保持已污染（下次提交照样拒绝并重试），已提交版本不变", rerr); }
         pthread_mutex_unlock(&g_lock);
@@ -489,7 +497,11 @@ HLE_FORCE("_ZN2nn2fs6CommitEPKc", "fsp-srv；事务式存档：工作目录整�
     Result r = RES_OK;
     if (!access(neu, F_OK)) rm_tree(neu);
     if (clonefile(g_mnt[i].dir, neu, 0)) { LOG("【红】存档提交：clonefile %s 失败 errno=%d（已提交版本不变）", neu, errno); r = RES_FAIL; }
-    else if (renamex_np(neu, g_mnt[i].commit, RENAME_SWAP)) { LOG("【红】存档提交：原子互换失败 errno=%d（已提交版本不变）", errno); rm_tree(neu); r = RES_FAIL; }
+    else if (renamex_np(neu, g_mnt[i].commit, RENAME_SWAP)) {
+        /* 公共目录（sdcardfs）不支持目录互换/rename：降级为删已提交版 + 整树拷贝（原子性略降，先保证存得上） */
+        if (rm_tree(g_mnt[i].commit) || clonefile(neu, g_mnt[i].commit, 0)) { LOG("【红】存档提交：互换与降级复制都失败 errno=%d（已提交版本不变）", errno); rm_tree(neu); r = RES_FAIL; }
+        else rm_tree(neu);
+    }
     else rm_tree(neu);                                                  // 换下来的旧版 | the old version that was swapped out
     // 耗时读数（整数微秒，不带浮点）：提交前钩子、克隆 + 原子互换各多久；从本事务第一次存档写到提交完一共多久（游戏写文件 + 提交，0 = 本事务没有存档写）
     // Timing readouts (integer microseconds, no floating point): how long the pre-commit hook and the clone + atomic swap each took; how long in total from this transaction's first save write to the end of the commit (the game writing files + the commit; 0 = no save write in this transaction)
